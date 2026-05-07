@@ -174,7 +174,7 @@ pub fn seconds_until(target: DateTime<Utc>, now: DateTime<Utc>) -> u64 {
 /// normal next-fetch target (`next_rotation + wake_delay`) — pushing past
 /// that would have the device skip a scheduled rotation. With no rotation
 /// schedule the cap doesn't apply.
-pub fn error_refresh_target(
+pub fn calculate_error_refresh_time(
     error_refresh: Duration,
     wake_delay: Duration,
     next_rotation: Option<DateTime<Utc>>,
@@ -358,18 +358,18 @@ mod tests {
     }
 
     #[test]
-    fn error_refresh_target_no_schedule_uses_base() {
+    fn calculate_error_refresh_time_no_schedule_uses_base() {
         let now = Utc::now();
-        let t = error_refresh_target(Duration::hours(1), Duration::zero(), None, now);
+        let t = calculate_error_refresh_time(Duration::hours(1), Duration::zero(), None, now);
         assert_eq!(t, now + Duration::hours(1));
     }
 
     #[test]
-    fn error_refresh_target_clamps_to_wake_target_when_sooner() {
+    fn calculate_error_refresh_time_clamps_to_wake_target_when_sooner() {
         let now = Utc::now();
         // Next rotation in 10 min, wake_delay 5 min → cap is 15 min.
         let next_rotation = now + Duration::minutes(10);
-        let t = error_refresh_target(
+        let t = calculate_error_refresh_time(
             Duration::hours(1),
             Duration::minutes(5),
             Some(next_rotation),
@@ -379,11 +379,11 @@ mod tests {
     }
 
     #[test]
-    fn error_refresh_target_uses_base_when_wake_target_is_later() {
+    fn calculate_error_refresh_time_uses_base_when_wake_target_is_later() {
         let now = Utc::now();
         // Next rotation in 6 h → 1 h error_refresh wins.
         let next_rotation = now + Duration::hours(6);
-        let t = error_refresh_target(
+        let t = calculate_error_refresh_time(
             Duration::hours(1),
             Duration::zero(),
             Some(next_rotation),
