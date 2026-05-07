@@ -36,7 +36,7 @@ use config::{Config, ScreenConfig};
 use dither::PreparedDitherMethod;
 use mqtt::Publisher;
 use overlays::{BatteryIndicator, Infobox, Overlay, OverlayContext, SensorState};
-use screen_state::{ScreenState, error_refresh_target, seconds_until};
+use screen_state::{ScreenState, calculate_error_refresh_time, seconds_until};
 
 struct Screen {
     config: ScreenConfig,
@@ -173,11 +173,6 @@ impl std::fmt::Display for PowerState {
     }
 }
 
-enum EncodePngError {
-    Pipeline(anyhow::Error),
-    Task(tokio::task::JoinError),
-}
-
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     tracing_subscriber::registry()
@@ -312,20 +307,10 @@ async fn screen_handler(
 
     let png = match encode_png_blocking(Arc::clone(screen), name.clone(), img).await {
         Ok(png) => png,
-        Err(EncodePngError::Pipeline(e)) => {
+        Err(e) => {
             tracing::error!(screen = %name, error = %format!("{e:#}"), "dither failed");
             return error_response_with_refresh(
                 format!("dither failed: {e:#}"),
-                cfg,
-                next_rotation,
-                now,
-                uri.path(),
-            );
-        }
-        Err(EncodePngError::Task(e)) => {
-            tracing::error!(screen = %name, error = %e, "dither task panicked");
-            return error_response_with_refresh(
-                format!("dither task panicked: {e}"),
                 cfg,
                 next_rotation,
                 now,
@@ -339,9 +324,9 @@ async fn screen_handler(
         .headers_mut()
         .insert(header::CONTENT_TYPE, HeaderValue::from_static("image/png"));
 
-    let target = refresh_target(degraded, cfg, next_rotation, now);
-    if let Some(target) = target {
-        set_refresh_header(&mut response, target, now, uri.path());
+    let refresh_at = calculate_refresh_time(degraded, cfg, next_rotation, now);
+    if let Some(refresh_at) = refresh_at {
+        set_refresh_header(&mut response, refresh_at, now, uri.path());
     }
 
     response
@@ -351,7 +336,7 @@ async fn encode_png_blocking(
     screen: Arc<Screen>,
     name: String,
     img: Pixmap,
-) -> Result<Vec<u8>, EncodePngError> {
+) -> anyhow::Result<Vec<u8>> {
     tokio::task::spawn_blocking(move || {
         let dither_start = Instant::now();
         let palette_image = screen.dither_method.run(img)?;
@@ -369,11 +354,10 @@ async fn encode_png_blocking(
         Ok::<_, anyhow::Error>(png)
     })
     .await
-    .map_err(EncodePngError::Task)?
-    .map_err(EncodePngError::Pipeline)
+    .context("dither task panicked")?
 }
 
-fn refresh_target(
+fn calculate_refresh_time(
     degraded: bool,
     cfg: &ScreenConfig,
     next_rotation: Option<DateTime<Utc>>,
@@ -385,7 +369,7 @@ fn refresh_target(
     // image. On a soft failure, error_refresh is capped against the normal
     // next-fetch target so we don't push past it.
     if degraded {
-        Some(error_refresh_target(
+        Some(calculate_error_refresh_time(
             cfg.error_refresh,
             cfg.wake_delay,
             next_rotation,
@@ -418,7 +402,8 @@ fn error_response_with_refresh(
     path: &str,
 ) -> Response {
     let mut response = (StatusCode::INTERNAL_SERVER_ERROR, body).into_response();
-    let target = error_refresh_target(cfg.error_refresh, cfg.wake_delay, next_rotation, now);
-    set_refresh_header(&mut response, target, now, path);
+    let refresh_at =
+        calculate_error_refresh_time(cfg.error_refresh, cfg.wake_delay, next_rotation, now);
+    set_refresh_header(&mut response, refresh_at, now, path);
     response
 }
