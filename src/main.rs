@@ -25,9 +25,10 @@ use axum::{
     response::{IntoResponse, Response},
     routing::get,
 };
-use chrono::{DateTime, Duration, Utc};
+use chrono::{DateTime, Utc};
 use reqwest::Client;
 use serde::Deserialize;
+use tiny_skia::Pixmap;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 use album::AlbumClient;
@@ -172,6 +173,11 @@ impl std::fmt::Display for PowerState {
     }
 }
 
+enum EncodePngError {
+    Pipeline(anyhow::Error),
+    Task(tokio::task::JoinError),
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     tracing_subscriber::registry()
@@ -283,8 +289,7 @@ async fn screen_handler(
                     tracing::error!(screen = %name, error = %format!("{pe:#}"), "placeholder allocation failed");
                     return error_response_with_refresh(
                         format!("placeholder failed: {pe:#}"),
-                        cfg.error_refresh,
-                        cfg.wake_delay,
+                        cfg,
                         next_rotation,
                         now,
                         uri.path(),
@@ -305,46 +310,23 @@ async fn screen_handler(
         publisher.publish_screen_state(&name, &cfg.publish, &sensors, now);
     }
 
-    let png = match tokio::task::spawn_blocking({
-        let screen = Arc::clone(screen);
-        let name = name.clone();
-        move || {
-            let dither_start = Instant::now();
-            let palette_image = screen.dither_method.run(img)?;
-            let dither_ms = dither_start.elapsed().as_secs_f64() * 1000.0;
-            let encode_start = Instant::now();
-            let png = palette_image.to_png().map_err(anyhow::Error::from)?;
-            let encode_ms = encode_start.elapsed().as_secs_f64() * 1000.0;
-            tracing::debug!(
-                screen = %name,
-                bytes = png.len(),
-                dither_ms = format_args!("{dither_ms:.1}"),
-                encode_ms = format_args!("{encode_ms:.1}"),
-                "png ready"
-            );
-            Ok::<_, anyhow::Error>(png)
-        }
-    })
-    .await
-    {
-        Ok(Ok(png)) => png,
-        Ok(Err(e)) => {
+    let png = match encode_png_blocking(Arc::clone(screen), name.clone(), img).await {
+        Ok(png) => png,
+        Err(EncodePngError::Pipeline(e)) => {
             tracing::error!(screen = %name, error = %format!("{e:#}"), "dither failed");
             return error_response_with_refresh(
                 format!("dither failed: {e:#}"),
-                cfg.error_refresh,
-                cfg.wake_delay,
+                cfg,
                 next_rotation,
                 now,
                 uri.path(),
             );
         }
-        Err(e) => {
+        Err(EncodePngError::Task(e)) => {
             tracing::error!(screen = %name, error = %e, "dither task panicked");
             return error_response_with_refresh(
                 format!("dither task panicked: {e}"),
-                cfg.error_refresh,
-                cfg.wake_delay,
+                cfg,
                 next_rotation,
                 now,
                 uri.path(),
@@ -357,13 +339,52 @@ async fn screen_handler(
         .headers_mut()
         .insert(header::CONTENT_TYPE, HeaderValue::from_static("image/png"));
 
-    // Tell the client when to come back; URL strips query params so a next/
-    // previous action doesn't repeat on auto-refresh. On a successful render
-    // wake_delay pushes the target past the scheduled rotation so early
-    // client-clock drift still lands on the new image. On a soft failure
-    // (degraded image) we use error_refresh instead, capped against the
-    // normal next-fetch target so we don't push past it.
-    let target = if degraded {
+    let target = refresh_target(degraded, cfg, next_rotation, now);
+    if let Some(target) = target {
+        set_refresh_header(&mut response, target, now, uri.path());
+    }
+
+    response
+}
+
+async fn encode_png_blocking(
+    screen: Arc<Screen>,
+    name: String,
+    img: Pixmap,
+) -> Result<Vec<u8>, EncodePngError> {
+    tokio::task::spawn_blocking(move || {
+        let dither_start = Instant::now();
+        let palette_image = screen.dither_method.run(img)?;
+        let dither_ms = dither_start.elapsed().as_secs_f64() * 1000.0;
+        let encode_start = Instant::now();
+        let png = palette_image.to_png().map_err(anyhow::Error::from)?;
+        let encode_ms = encode_start.elapsed().as_secs_f64() * 1000.0;
+        tracing::debug!(
+            screen = %name,
+            bytes = png.len(),
+            dither_ms = format_args!("{dither_ms:.1}"),
+            encode_ms = format_args!("{encode_ms:.1}"),
+            "png ready"
+        );
+        Ok::<_, anyhow::Error>(png)
+    })
+    .await
+    .map_err(EncodePngError::Task)?
+    .map_err(EncodePngError::Pipeline)
+}
+
+fn refresh_target(
+    degraded: bool,
+    cfg: &ScreenConfig,
+    next_rotation: Option<DateTime<Utc>>,
+    now: DateTime<Utc>,
+) -> Option<DateTime<Utc>> {
+    // URL strips query params so a next/previous action doesn't repeat on
+    // auto-refresh. On a successful render, wake_delay pushes the target past
+    // the scheduled rotation so early client-clock drift still lands on the new
+    // image. On a soft failure, error_refresh is capped against the normal
+    // next-fetch target so we don't push past it.
+    if degraded {
         Some(error_refresh_target(
             cfg.error_refresh,
             cfg.wake_delay,
@@ -372,12 +393,7 @@ async fn screen_handler(
         ))
     } else {
         next_rotation.map(|n| n + cfg.wake_delay)
-    };
-    if let Some(target) = target {
-        set_refresh_header(&mut response, target, now, uri.path());
     }
-
-    response
 }
 
 fn set_refresh_header(
@@ -396,14 +412,13 @@ fn set_refresh_header(
 
 fn error_response_with_refresh(
     body: String,
-    error_refresh: Duration,
-    wake_delay: Duration,
+    cfg: &ScreenConfig,
     next_rotation: Option<DateTime<Utc>>,
     now: DateTime<Utc>,
     path: &str,
 ) -> Response {
     let mut response = (StatusCode::INTERNAL_SERVER_ERROR, body).into_response();
-    let target = error_refresh_target(error_refresh, wake_delay, next_rotation, now);
+    let target = error_refresh_target(cfg.error_refresh, cfg.wake_delay, next_rotation, now);
     set_refresh_header(&mut response, target, now, path);
     response
 }
