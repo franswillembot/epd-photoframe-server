@@ -86,8 +86,6 @@ server.
    inline comments (rotation schedule, info overlay, battery indicator,
    dithering, MQTT, …).
 
-Review: No mention of config.example.toml for a full overview of all options, maybe step 6: expand to your wishes, see config.example.toml for examples of all possible configurations.
-
 ### Creating the Google Photos album
 
 In the Google Photos web app or mobile app:
@@ -102,11 +100,10 @@ In the Google Photos web app or mobile app:
 
 You can keep adding or removing photos later. The server scrapes the
 share page lazily — on whichever request first finds the cached copy
-older than an hour — so changes show up in at most an hour. Hitting the
-endpoint with `?action=refresh` drops the cached copy and re-scrapes
-immediately if you don't want to wait.
-
-Review: Album is not scraped hourly. It's retrieved whenever the frame loads, with a cache of an hour. A button press (next, previous, refresh) invalidates that cache.
+older than an hour — so changes show up after the next frame fetch once
+the cache has expired. Hitting the endpoint with `?action=refresh`,
+`?action=next`, or `?action=previous` drops the cached copy and
+re-scrapes immediately if you don't want to wait.
 
 ### Running with Docker (recommended for deployment)
 
@@ -177,8 +174,6 @@ defaults. The example config covers:
 what values it accepts, and what the default is. Treat it as the
 reference; this section is just the highlights.
 
-Review: also in this section refer to config.example.toml for the full range of configuration options available.
-
 ## Home Assistant / MQTT
 
 If you add a top-level `[mqtt]` section, the server publishes whatever
@@ -193,8 +188,6 @@ same convention (openHAB, Domoticz, IoBroker, …) — each frame just
 appears as a device with the right sensor entities, no manual YAML. The
 state topics themselves are plain MQTT, so anything else on the bus can
 read them too.
-
-Review: mention that the server will publish to discovery topic so home assistant (and others) should automatically pick it up.
 
 ## Hardware
 

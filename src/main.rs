@@ -31,7 +31,7 @@ use serde::Deserialize;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 use album::AlbumClient;
-use config::{Config, Publish, ScreenConfig};
+use config::{Config, ScreenConfig};
 use dither::PreparedDitherMethod;
 use mqtt::Publisher;
 use overlays::{BatteryIndicator, Infobox, Overlay, OverlayContext, SensorState};
@@ -45,6 +45,39 @@ struct Screen {
     /// Per-screen overlay list, built once at startup. Render order =
     /// list order (later overlays draw on top of earlier ones).
     overlays: Vec<Box<dyn Overlay>>,
+}
+
+impl Screen {
+    fn from_config(config: ScreenConfig) -> anyhow::Result<(String, Arc<Self>)> {
+        let album = AlbumClient::new(config.share_url.clone())?;
+        let state = Mutex::new(ScreenState::new(&config));
+        let dither_method = PreparedDitherMethod::prepare(&config.dither)
+            .with_context(|| format!("preparing dither for screen `{}`", config.name))?;
+        let overlays = build_overlays(&config);
+        let name = config.name.clone();
+        Ok((
+            name,
+            Arc::new(Self {
+                config,
+                album,
+                state,
+                dither_method,
+                overlays,
+            }),
+        ))
+    }
+}
+
+fn build_overlays(config: &ScreenConfig) -> Vec<Box<dyn Overlay>> {
+    // Order here = render order; later overlays draw on top.
+    let mut overlays: Vec<Box<dyn Overlay>> = Vec::new();
+    if let Some(cfg) = &config.infobox {
+        overlays.push(Box::new(Infobox::new(cfg.clone(), config.locale.clone())));
+    }
+    if let Some(cfg) = &config.battery_indicator {
+        overlays.push(Box::new(BatteryIndicator::new(cfg.clone())));
+    }
+    overlays
 }
 
 /// Shared application state. Wrapped in an `Arc` once at construction
@@ -75,6 +108,30 @@ struct ScreenQuery {
     humidity_pct: Option<f32>,
     #[serde(default)]
     power: Option<PowerState>,
+}
+
+impl ScreenQuery {
+    fn refresh_album(&self) -> bool {
+        matches!(self.action, Some(Action::Refresh))
+    }
+
+    fn cursor_advance(&self) -> i64 {
+        match self.action {
+            Some(Action::Next) => 1,
+            Some(Action::Previous) => -1,
+            _ => 0,
+        }
+    }
+
+    fn sensors(&self) -> SensorState {
+        SensorState {
+            battery_mv: self.battery_mv,
+            battery_pct: self.battery_pct,
+            temperature_c: self.temperature_c,
+            humidity_pct: self.humidity_pct,
+            power: self.power,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Deserialize)]
@@ -140,29 +197,7 @@ async fn main() -> anyhow::Result<()> {
     let screens: HashMap<String, Arc<Screen>> = config
         .screens
         .into_iter()
-        .map(|s| {
-            let album = AlbumClient::new(s.share_url.clone())?;
-            let state = Mutex::new(ScreenState::new(&s));
-            let dither_method = PreparedDitherMethod::prepare(&s.dither)
-                .with_context(|| format!("preparing dither for screen `{}`", s.name))?;
-            // Build the overlay list from whichever named config sections
-            // are present. Order here = render order (later draws on top).
-            let mut overlays: Vec<Box<dyn Overlay>> = Vec::new();
-            if let Some(cfg) = &s.infobox {
-                overlays.push(Box::new(Infobox::new(cfg.clone(), s.locale.clone())));
-            }
-            if let Some(cfg) = &s.battery_indicator {
-                overlays.push(Box::new(BatteryIndicator::new(cfg.clone())));
-            }
-            let screen = Screen {
-                album,
-                state,
-                dither_method,
-                overlays,
-                config: s,
-            };
-            Ok::<_, anyhow::Error>((screen.config.name.clone(), Arc::new(screen)))
-        })
+        .map(Screen::from_config)
         .collect::<anyhow::Result<_>>()?;
 
     let state = Arc::new(AppState {
@@ -195,26 +230,15 @@ async fn screen_handler(
     };
 
     let now = Utc::now();
-    let fresh = matches!(q.action, Some(Action::Refresh));
-    let advance: i64 = match q.action {
-        Some(Action::Next) => 1,
-        Some(Action::Previous) => -1,
-        _ => 0,
-    };
+    let fresh = q.refresh_album();
+    let advance = q.cursor_advance();
 
     tracing::info!(screen = %name, ?q.action, "fetching image");
     let cfg = &screen.config;
     let mut degraded = false;
     let mut next_rotation: Option<DateTime<Utc>> = None;
 
-    // Snapshot device-reported sensor data once; overlays read from this.
-    let sensors = SensorState {
-        battery_mv: q.battery_mv,
-        battery_pct: q.battery_pct,
-        temperature_c: q.temperature_c,
-        humidity_pct: q.humidity_pct,
-        power: q.power,
-    };
+    let sensors = q.sensors();
     let ctx = OverlayContext {
         now: now.with_timezone(&screen.config.timezone),
         sensors: &sensors,
@@ -278,32 +302,7 @@ async fn screen_handler(
     }
 
     if let Some(publisher) = &state.mqtt {
-        if cfg.publish.contains(&Publish::Battery) {
-            if let Some(v) = q.battery_mv {
-                publisher.publish(&name, "battery_mv", v);
-            }
-            if let Some(v) = q.battery_pct {
-                publisher.publish(&name, "battery_pct", v);
-            }
-        }
-        if cfg.publish.contains(&Publish::Temperature)
-            && let Some(v) = q.temperature_c
-        {
-            publisher.publish(&name, "temperature", v);
-        }
-        if cfg.publish.contains(&Publish::Humidity)
-            && let Some(v) = q.humidity_pct
-        {
-            publisher.publish(&name, "humidity", v);
-        }
-        if cfg.publish.contains(&Publish::Power)
-            && let Some(v) = q.power
-        {
-            publisher.publish(&name, "power", v);
-        }
-        if cfg.publish.contains(&Publish::LastSeen) {
-            publisher.publish(&name, "last_seen", now.to_rfc3339());
-        }
+        publisher.publish_screen_state(&name, &cfg.publish, &sensors, now);
     }
 
     let png = match tokio::task::spawn_blocking({
