@@ -169,6 +169,31 @@ pub fn seconds_until(target: DateTime<Utc>, now: DateTime<Utc>) -> u64 {
     secs.saturating_add((td.subsec_nanos() > 0) as u64)
 }
 
+/// The absolute moment at which a successful or degraded render should ask
+/// the device to fetch again. On a successful render, `wake_delay` pushes the
+/// target past the scheduled rotation so early client-clock drift still lands
+/// on the new image. On a degraded render, `error_refresh` is capped against
+/// the normal next-fetch target so the retry does not skip a scheduled
+/// rotation.
+pub fn calculate_refresh_time(
+    degraded: bool,
+    error_refresh: Duration,
+    wake_delay: Duration,
+    next_rotation: Option<DateTime<Utc>>,
+    now: DateTime<Utc>,
+) -> Option<DateTime<Utc>> {
+    if degraded {
+        Some(calculate_error_refresh_time(
+            error_refresh,
+            wake_delay,
+            next_rotation,
+            now,
+        ))
+    } else {
+        next_rotation.map(|n| n + wake_delay)
+    }
+}
+
 /// The absolute moment at which an error response should ask the device to
 /// retry. Base is `now + error_refresh`, but never later than the device's
 /// normal next-fetch target (`next_rotation + wake_delay`) — pushing past
@@ -362,6 +387,41 @@ mod tests {
         let now = Utc::now();
         let t = calculate_error_refresh_time(Duration::hours(1), Duration::zero(), None, now);
         assert_eq!(t, now + Duration::hours(1));
+    }
+
+    #[test]
+    fn calculate_refresh_time_success_uses_next_rotation_plus_wake_delay() {
+        let now = Utc::now();
+        let next_rotation = now + Duration::hours(6);
+        let t = calculate_refresh_time(
+            false,
+            Duration::hours(1),
+            Duration::minutes(5),
+            Some(next_rotation),
+            now,
+        );
+        assert_eq!(t, Some(next_rotation + Duration::minutes(5)));
+    }
+
+    #[test]
+    fn calculate_refresh_time_success_without_schedule_has_no_refresh() {
+        let now = Utc::now();
+        let t = calculate_refresh_time(false, Duration::hours(1), Duration::minutes(5), None, now);
+        assert_eq!(t, None);
+    }
+
+    #[test]
+    fn calculate_refresh_time_degraded_uses_error_refresh_policy() {
+        let now = Utc::now();
+        let next_rotation = now + Duration::minutes(10);
+        let t = calculate_refresh_time(
+            true,
+            Duration::hours(1),
+            Duration::minutes(5),
+            Some(next_rotation),
+            now,
+        );
+        assert_eq!(t, Some(next_rotation + Duration::minutes(5)));
     }
 
     #[test]
