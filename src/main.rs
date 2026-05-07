@@ -150,27 +150,34 @@ struct ScreenQuery {
 }
 
 impl ScreenQuery {
-    fn refresh_album(&self) -> bool {
-        matches!(self.action, Some(Action::Refresh))
-    }
-
-    fn cursor_advance(&self) -> i64 {
-        match self.action {
+    fn into_request(self) -> ScreenRequest {
+        let refresh_album = matches!(self.action, Some(Action::Refresh));
+        let cursor_advance = match self.action {
             Some(Action::Next) => 1,
             Some(Action::Previous) => -1,
             _ => 0,
-        }
-    }
-
-    fn sensors(&self) -> SensorState {
-        SensorState {
+        };
+        let sensors = SensorState {
             battery_mv: self.battery_mv,
             battery_pct: self.battery_pct,
             temperature_c: self.temperature_c,
             humidity_pct: self.humidity_pct,
             power: self.power,
+        };
+        ScreenRequest {
+            action: self.action,
+            refresh_album,
+            cursor_advance,
+            sensors,
         }
     }
+}
+
+struct ScreenRequest {
+    action: Option<Action>,
+    refresh_album: bool,
+    cursor_advance: i64,
+    sensors: SensorState,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize)]
@@ -220,18 +227,16 @@ async fn screen_handler(
         return (StatusCode::NOT_FOUND, format!("screen `{name}` not found")).into_response();
     };
 
+    let request = q.into_request();
     let now = Utc::now();
-    let fresh = q.refresh_album();
-    let advance = q.cursor_advance();
 
-    tracing::info!(screen = %name, ?q.action, "fetching image");
+    tracing::info!(screen = %name, ?request.action, "fetching image");
     let cfg = &screen.config;
     let mut next_rotation: Option<DateTime<Utc>> = None;
 
-    let sensors = q.sensors();
     let ctx = OverlayContext {
         now: now.with_timezone(&screen.config.timezone),
-        sensors: &sensors,
+        sensors: &request.sensors,
         http: &state.http,
         canvas_size: (cfg.width, cfg.height),
     };
@@ -240,8 +245,15 @@ async fn screen_handler(
     // concurrently. Each overlay's preprocess does its own external work
     // (e.g. weather fetch); soft failures surface via `ReadyOverlay::degraded`
     // rather than aborting the request.
-    let canvas_future =
-        load_photo_or_placeholder(screen, &name, cfg, now, fresh, advance, &mut next_rotation);
+    let canvas_future = load_photo_or_placeholder(
+        screen,
+        &name,
+        cfg,
+        now,
+        request.refresh_album,
+        request.cursor_advance,
+        &mut next_rotation,
+    );
     let overlays_future =
         futures::future::join_all(screen.overlays.iter().map(|o| o.preprocess(&ctx)));
     let (canvas_result, ready_overlays) = tokio::join!(canvas_future, overlays_future,);
@@ -271,7 +283,7 @@ async fn screen_handler(
     }
 
     if let Some(publisher) = &state.mqtt {
-        publisher.publish_screen_state(&name, &cfg.publish, &sensors, now);
+        publisher.publish_screen_state(&name, &cfg.publish, &request.sensors, now);
     }
 
     let png = match encode_png_blocking(Arc::clone(screen), name.clone(), img).await {
