@@ -97,6 +97,35 @@ struct AppState {
     mqtt: Option<Publisher>,
 }
 
+impl AppState {
+    fn from_config(config: Config) -> anyhow::Result<(Self, std::net::SocketAddr)> {
+        let listen = config.listen;
+        let mqtt = config.mqtt.as_ref().map(|m| {
+            tracing::info!(broker = %m.broker, port = m.port, "connecting to mqtt broker");
+            Publisher::connect(m, &config.screens)
+        });
+        let screens = build_screens(config.screens)?;
+        let http = Client::builder()
+            .timeout(std::time::Duration::from_secs(30))
+            .build()?;
+        Ok((
+            Self {
+                screens,
+                http,
+                mqtt,
+            },
+            listen,
+        ))
+    }
+}
+
+fn build_screens(screens: Vec<ScreenConfig>) -> anyhow::Result<HashMap<String, Arc<Screen>>> {
+    screens
+        .into_iter()
+        .map(Screen::from_config)
+        .collect::<anyhow::Result<_>>()
+}
+
 struct CanvasResult {
     image: Pixmap,
     degraded: bool,
@@ -195,26 +224,8 @@ async fn main() -> anyhow::Result<()> {
         .unwrap_or_else(|| "config.toml".to_string());
     let config = Config::from_file(&config_path)?;
     tracing::info!(path = %config_path, screens = config.screens.len(), "loaded config");
-    let listen = config.listen;
-
-    let mqtt = config.mqtt.as_ref().map(|m| {
-        tracing::info!(broker = %m.broker, port = m.port, "connecting to mqtt broker");
-        Publisher::connect(m, &config.screens)
-    });
-
-    let screens: HashMap<String, Arc<Screen>> = config
-        .screens
-        .into_iter()
-        .map(Screen::from_config)
-        .collect::<anyhow::Result<_>>()?;
-
-    let state = Arc::new(AppState {
-        screens,
-        http: Client::builder()
-            .timeout(std::time::Duration::from_secs(30))
-            .build()?,
-        mqtt,
-    });
+    let (state, listen) = AppState::from_config(config)?;
+    let state = Arc::new(state);
 
     let app = Router::new()
         .route("/screen/{name}", get(screen_handler))
