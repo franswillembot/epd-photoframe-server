@@ -2,6 +2,7 @@ mod album;
 mod background;
 mod config;
 mod degraded;
+mod device;
 mod dither;
 mod draw;
 mod mqtt;
@@ -33,9 +34,10 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 use album::AlbumClient;
 use config::{Config, ScreenConfig};
+use device::{PowerState, SensorState};
 use dither::PreparedDitherMethod;
 use mqtt::Publisher;
-use overlays::{BatteryIndicator, Infobox, Overlay, OverlayContext, SensorState};
+use overlays::{BatteryIndicator, Infobox, Overlay, OverlayContext};
 use screen_state::{
     ScreenState, calculate_error_refresh_time, calculate_refresh_time, seconds_until,
 };
@@ -177,36 +179,6 @@ enum Action {
     Next,
     Previous,
     Refresh,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum PowerState {
-    Battery,
-    Charging,
-    Full,
-    Fault,
-}
-
-impl PowerState {
-    /// Every variant, in declaration order. Used by MQTT discovery to
-    /// advertise the permitted enum values.
-    pub const ALL: [Self; 4] = [Self::Battery, Self::Charging, Self::Full, Self::Fault];
-
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Battery => "battery",
-            Self::Charging => "charging",
-            Self::Full => "full",
-            Self::Fault => "fault",
-        }
-    }
-}
-
-impl std::fmt::Display for PowerState {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.as_str())
-    }
 }
 
 #[tokio::main]
