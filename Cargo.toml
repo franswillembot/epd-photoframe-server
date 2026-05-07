@@ -17,7 +17,7 @@ toml = "0.8"
 anyhow = "1"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 image = "0.25"
-epd-dither = { git = "https://github.com/Frans-Willem/epd-dither", rev = "029f2827f6e74a52d88890b3383ba97878051bb1", default-features = false, features = ["alloc", "image", "rand"] }
+epd-dither = { git = "https://github.com/Frans-Willem/epd-dither", rev = "a25d70f412f4bcab775aee28de7f0767a5cb2768", default-features = false, features = ["alloc", "image", "rand"] }
 nalgebra = { version = "0.34", default-features = false, features = ["std"] }
 png = "0.18"
 rand = "0.9"

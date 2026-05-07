@@ -14,6 +14,7 @@ mod weather;
 use std::{
     collections::HashMap,
     sync::{Arc, Mutex},
+    time::Instant,
 };
 
 use anyhow::Context;
@@ -307,11 +308,22 @@ async fn screen_handler(
 
     let png = match tokio::task::spawn_blocking({
         let screen = Arc::clone(screen);
+        let name = name.clone();
         move || {
-            screen
-                .dither_method
-                .run(img)
-                .and_then(|p| p.to_png().map_err(anyhow::Error::from))
+            let dither_start = Instant::now();
+            let palette_image = screen.dither_method.run(img)?;
+            let dither_ms = dither_start.elapsed().as_secs_f64() * 1000.0;
+            let encode_start = Instant::now();
+            let png = palette_image.to_png().map_err(anyhow::Error::from)?;
+            let encode_ms = encode_start.elapsed().as_secs_f64() * 1000.0;
+            tracing::debug!(
+                screen = %name,
+                bytes = png.len(),
+                dither_ms = format_args!("{dither_ms:.1}"),
+                encode_ms = format_args!("{encode_ms:.1}"),
+                "png ready"
+            );
+            Ok::<_, anyhow::Error>(png)
         }
     })
     .await
