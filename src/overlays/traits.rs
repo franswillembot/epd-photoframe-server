@@ -13,7 +13,7 @@ use chrono_tz::Tz;
 use reqwest::Client;
 use tiny_skia::Pixmap;
 
-use super::SensorState;
+use crate::device::SensorState;
 
 /// Per-request state passed to every overlay's `preprocess`. Some
 /// fields aren't yet read by any overlay — they're here so future

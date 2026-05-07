@@ -9,9 +9,8 @@ use std::time::Duration;
 use chrono::{DateTime, Utc};
 use rumqttc::{AsyncClient, MqttOptions, QoS};
 
-use crate::PowerState;
 use crate::config::{MqttConfig, Publish, ScreenConfig};
-use crate::overlays::SensorState;
+use crate::device::{PowerState, SensorState};
 
 pub struct Publisher {
     client: AsyncClient,
