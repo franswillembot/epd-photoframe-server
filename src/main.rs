@@ -36,7 +36,9 @@ use config::{Config, ScreenConfig};
 use dither::PreparedDitherMethod;
 use mqtt::Publisher;
 use overlays::{BatteryIndicator, Infobox, Overlay, OverlayContext, SensorState};
-use screen_state::{ScreenState, calculate_error_refresh_time, seconds_until};
+use screen_state::{
+    ScreenState, calculate_error_refresh_time, calculate_refresh_time, seconds_until,
+};
 
 struct Screen {
     config: ScreenConfig,
@@ -324,7 +326,13 @@ async fn screen_handler(
         .headers_mut()
         .insert(header::CONTENT_TYPE, HeaderValue::from_static("image/png"));
 
-    let refresh_at = calculate_refresh_time(degraded, cfg, next_rotation, now);
+    let refresh_at = calculate_refresh_time(
+        degraded,
+        cfg.error_refresh,
+        cfg.wake_delay,
+        next_rotation,
+        now,
+    );
     if let Some(refresh_at) = refresh_at {
         set_refresh_header(&mut response, refresh_at, now, uri.path());
     }
@@ -355,29 +363,6 @@ async fn encode_png_blocking(
     })
     .await
     .context("dither task panicked")?
-}
-
-fn calculate_refresh_time(
-    degraded: bool,
-    cfg: &ScreenConfig,
-    next_rotation: Option<DateTime<Utc>>,
-    now: DateTime<Utc>,
-) -> Option<DateTime<Utc>> {
-    // URL strips query params so a next/previous action doesn't repeat on
-    // auto-refresh. On a successful render, wake_delay pushes the target past
-    // the scheduled rotation so early client-clock drift still lands on the new
-    // image. On a soft failure, error_refresh is capped against the normal
-    // next-fetch target so we don't push past it.
-    if degraded {
-        Some(calculate_error_refresh_time(
-            cfg.error_refresh,
-            cfg.wake_delay,
-            next_rotation,
-            now,
-        ))
-    } else {
-        next_rotation.map(|n| n + cfg.wake_delay)
-    }
 }
 
 fn set_refresh_header(
