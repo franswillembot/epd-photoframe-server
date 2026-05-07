@@ -63,6 +63,7 @@ fn default_mqtt_state_prefix() -> String {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ScreenConfig {
     pub name: String,
     /// Human-readable label published over MQTT (used as the Home Assistant

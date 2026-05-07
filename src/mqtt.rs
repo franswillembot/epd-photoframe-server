@@ -3,12 +3,15 @@
 //! task so request handlers never block on broker availability — state
 //! publishes use `try_publish` and silently drop if the send buffer is full.
 
+use std::collections::HashSet;
 use std::time::Duration;
 
+use chrono::{DateTime, Utc};
 use rumqttc::{AsyncClient, MqttOptions, QoS};
 
 use crate::PowerState;
 use crate::config::{MqttConfig, Publish, ScreenConfig};
+use crate::overlays::SensorState;
 
 pub struct Publisher {
     client: AsyncClient,
@@ -203,6 +206,44 @@ impl Publisher {
             .try_publish(&topic, QoS::AtMostOnce, true, value.to_string())
         {
             tracing::warn!(topic = %topic, error = %e, "mqtt state publish failed");
+        }
+    }
+
+    /// Publishes all enabled sensor readings for one screen. Missing readings
+    /// are skipped, except `last_seen`, which is server-side and always
+    /// available.
+    pub fn publish_screen_state(
+        &self,
+        screen: &str,
+        enabled: &HashSet<Publish>,
+        sensors: &SensorState,
+        now: DateTime<Utc>,
+    ) {
+        if enabled.contains(&Publish::Battery) {
+            if let Some(v) = sensors.battery_mv {
+                self.publish(screen, "battery_mv", v);
+            }
+            if let Some(v) = sensors.battery_pct {
+                self.publish(screen, "battery_pct", v);
+            }
+        }
+        if enabled.contains(&Publish::Temperature)
+            && let Some(v) = sensors.temperature_c
+        {
+            self.publish(screen, "temperature", v);
+        }
+        if enabled.contains(&Publish::Humidity)
+            && let Some(v) = sensors.humidity_pct
+        {
+            self.publish(screen, "humidity", v);
+        }
+        if enabled.contains(&Publish::Power)
+            && let Some(v) = sensors.power
+        {
+            self.publish(screen, "power", v);
+        }
+        if enabled.contains(&Publish::LastSeen) {
+            self.publish(screen, "last_seen", now.to_rfc3339());
         }
     }
 }
