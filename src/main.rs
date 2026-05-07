@@ -258,7 +258,7 @@ async fn screen_handler(
     // (e.g. weather fetch); soft failures surface via `ReadyOverlay::degraded`
     // rather than aborting the request.
     let canvas_future =
-        load_canvas_or_placeholder(screen, &name, cfg, now, fresh, advance, &mut next_rotation);
+        load_photo_or_placeholder(screen, &name, cfg, now, fresh, advance, &mut next_rotation);
     let overlays_future =
         futures::future::join_all(screen.overlays.iter().map(|o| o.preprocess(&ctx)));
     let (canvas_result, ready_overlays) = tokio::join!(canvas_future, overlays_future,);
@@ -324,7 +324,7 @@ async fn screen_handler(
     response
 }
 
-async fn load_canvas_or_placeholder(
+async fn load_photo_or_placeholder(
     screen: &Screen,
     name: &str,
     cfg: &ScreenConfig,
@@ -333,7 +333,7 @@ async fn load_canvas_or_placeholder(
     advance: i64,
     next_rotation: &mut Option<DateTime<Utc>>,
 ) -> anyhow::Result<CanvasResult> {
-    match load_canvas(screen, cfg, now, fresh, advance, next_rotation).await {
+    match load_photo(screen, cfg, now, fresh, advance, next_rotation).await {
         Ok(image) => Ok(CanvasResult {
             image,
             degraded: false,
@@ -350,7 +350,7 @@ async fn load_canvas_or_placeholder(
     }
 }
 
-async fn load_canvas(
+async fn load_photo(
     screen: &Screen,
     cfg: &ScreenConfig,
     now: DateTime<Utc>,
