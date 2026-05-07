@@ -97,6 +97,11 @@ struct AppState {
     mqtt: Option<Publisher>,
 }
 
+struct CanvasResult {
+    image: Pixmap,
+    degraded: bool,
+}
+
 #[derive(Debug, Deserialize)]
 struct ScreenQuery {
     #[serde(default)]
@@ -238,7 +243,6 @@ async fn screen_handler(
 
     tracing::info!(screen = %name, ?q.action, "fetching image");
     let cfg = &screen.config;
-    let mut degraded = false;
     let mut next_rotation: Option<DateTime<Utc>> = None;
 
     let sensors = q.sensors();
@@ -253,46 +257,26 @@ async fn screen_handler(
     // concurrently. Each overlay's preprocess does its own external work
     // (e.g. weather fetch); soft failures surface via `ReadyOverlay::degraded`
     // rather than aborting the request.
-    let (image_result, ready_overlays) = tokio::join!(
-        async {
-            let img = screen
-                .album
-                .pick(cfg.width, cfg.height, &cfg.fit, fresh, |n, new| {
-                    let mut st = screen.state.lock().expect("screen state poisoned");
-                    let idx = st.pick_index(now, advance, fresh, new, n);
-                    next_rotation = st.next_scheduled_rotation(now);
-                    tracing::info!(
-                        seed = st.seed(),
-                        cursor = st.cursor(),
-                        idx,
-                        "selected photo"
-                    );
-                    idx
-                })
-                .await?;
-            background::apply(img, cfg.width, cfg.height, &cfg.background)
-        },
-        futures::future::join_all(screen.overlays.iter().map(|o| o.preprocess(&ctx))),
-    );
+    let canvas_future =
+        load_photo_or_placeholder(screen, &name, cfg, now, fresh, advance, &mut next_rotation);
+    let overlays_future =
+        futures::future::join_all(screen.overlays.iter().map(|o| o.preprocess(&ctx)));
+    let (canvas_result, ready_overlays) = tokio::join!(canvas_future, overlays_future,);
 
-    let mut img = match image_result {
-        Ok(img) => img,
+    let CanvasResult {
+        image: mut img,
+        mut degraded,
+    } = match canvas_result {
+        Ok(result) => result,
         Err(e) => {
-            tracing::warn!(screen = %name, error = %format!("{e:#}"), "image fetch failed; rendering placeholder");
-            degraded = true;
-            match degraded::placeholder(cfg.width, cfg.height, &cfg.background, &format!("{e:#}")) {
-                Ok(pm) => pm,
-                Err(pe) => {
-                    tracing::error!(screen = %name, error = %format!("{pe:#}"), "placeholder allocation failed");
-                    return error_response_with_refresh(
-                        format!("placeholder failed: {pe:#}"),
-                        cfg,
-                        next_rotation,
-                        now,
-                        uri.path(),
-                    );
-                }
-            }
+            tracing::error!(screen = %name, error = %format!("{e:#}"), "placeholder allocation failed");
+            return error_response_with_refresh(
+                format!("placeholder failed: {e:#}"),
+                cfg,
+                next_rotation,
+                now,
+                uri.path(),
+            );
         }
     };
 
@@ -338,6 +322,58 @@ async fn screen_handler(
     }
 
     response
+}
+
+async fn load_photo_or_placeholder(
+    screen: &Screen,
+    name: &str,
+    cfg: &ScreenConfig,
+    now: DateTime<Utc>,
+    fresh: bool,
+    advance: i64,
+    next_rotation: &mut Option<DateTime<Utc>>,
+) -> anyhow::Result<CanvasResult> {
+    match load_photo(screen, cfg, now, fresh, advance, next_rotation).await {
+        Ok(image) => Ok(CanvasResult {
+            image,
+            degraded: false,
+        }),
+        Err(e) => {
+            tracing::warn!(screen = %name, error = %format!("{e:#}"), "image fetch failed; rendering placeholder");
+            let image =
+                degraded::placeholder(cfg.width, cfg.height, &cfg.background, &format!("{e:#}"))?;
+            Ok(CanvasResult {
+                image,
+                degraded: true,
+            })
+        }
+    }
+}
+
+async fn load_photo(
+    screen: &Screen,
+    cfg: &ScreenConfig,
+    now: DateTime<Utc>,
+    fresh: bool,
+    advance: i64,
+    next_rotation: &mut Option<DateTime<Utc>>,
+) -> anyhow::Result<Pixmap> {
+    let img = screen
+        .album
+        .pick(cfg.width, cfg.height, &cfg.fit, fresh, |n, new| {
+            let mut st = screen.state.lock().expect("screen state poisoned");
+            let idx = st.pick_index(now, advance, fresh, new, n);
+            *next_rotation = st.next_scheduled_rotation(now);
+            tracing::info!(
+                seed = st.seed(),
+                cursor = st.cursor(),
+                idx,
+                "selected photo"
+            );
+            idx
+        })
+        .await?;
+    background::apply(img, cfg.width, cfg.height, &cfg.background)
 }
 
 async fn encode_png_blocking(
