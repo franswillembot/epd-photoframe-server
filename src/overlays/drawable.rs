@@ -21,7 +21,8 @@ use ab_glyph::{Font, FontRef, PxScale, ScaleFont};
 use taffy::prelude::*;
 use tiny_skia::Pixmap;
 
-use crate::config::{ColorConfig, Position};
+use crate::config::Position;
+use crate::config::color::ColorConfig;
 use crate::draw::{draw_line, paint_rounded_rect, text_width};
 
 /// Anything that can be sized and painted into a taffy node.

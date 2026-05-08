@@ -9,7 +9,9 @@ use std::collections::HashSet;
 use std::net::SocketAddr;
 use std::str::FromStr;
 
-pub use crate::color::{BackgroundMethod, ColorConfig};
+pub mod color;
+
+use color::{BackgroundMethod, ColorConfig};
 
 // ----- Top-level config -----------------------------------------------------
 

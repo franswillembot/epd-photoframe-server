@@ -21,7 +21,8 @@ use tiny_skia::{FillRule, Mask, Paint, Path, PathBuilder, Pixmap, Rect, Shader, 
 
 use super::drawable::{self, Drawable, paint};
 use super::{Overlay, OverlayContext, ReadyOverlay};
-use crate::config::{BatteryIndicatorConfig, BatteryStyle, ColorConfig};
+use crate::config::color::ColorConfig;
+use crate::config::{BatteryIndicatorConfig, BatteryStyle};
 use crate::draw::{asymmetric_rounded_rect_path, draw_line, text_width};
 
 static TEXT_FONT: LazyLock<FontRef<'static>> = LazyLock::new(|| {
@@ -390,7 +391,8 @@ fn intersect_mask(dst: &mut Mask, other: &Mask) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{ColorConfig, Position};
+    use crate::config::Position;
+    use crate::config::color::ColorConfig;
 
     fn cfg(style: BatteryStyle) -> BatteryIndicatorConfig {
         BatteryIndicatorConfig {

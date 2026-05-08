@@ -4,7 +4,7 @@ use tiny_skia::{
     Transform,
 };
 
-use crate::config::ColorConfig;
+use crate::config::color::ColorConfig;
 
 pub fn text_width<F: Font>(font: &F, scale: PxScale, text: &str) -> f32 {
     let s = font.as_scaled(scale);

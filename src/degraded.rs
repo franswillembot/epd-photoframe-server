@@ -8,7 +8,7 @@ use std::sync::LazyLock;
 use ab_glyph::{Font, FontRef, PxScale, ScaleFont};
 use tiny_skia::{Color, Pixmap};
 
-use crate::config::{BackgroundMethod, ColorConfig};
+use crate::config::color::{BackgroundMethod, ColorConfig};
 use crate::draw::{draw_line, text_width};
 
 static TEXT_FONT: LazyLock<FontRef<'static>> = LazyLock::new(|| {

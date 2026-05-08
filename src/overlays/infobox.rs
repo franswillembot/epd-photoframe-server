@@ -223,7 +223,7 @@ fn text_leaf(
     tree: &mut TaffyTree<GenericDrawable>,
     content: String,
     size: f32,
-    color: crate::config::ColorConfig,
+    color: crate::config::color::ColorConfig,
 ) -> NodeId {
     tree.new_leaf_with_context(
         Style::default(),
@@ -295,7 +295,7 @@ fn compact_cell(
     icon_glyph: char,
     max_temp: String,
     min_temp: String,
-    color: crate::config::ColorConfig,
+    color: crate::config::color::ColorConfig,
 ) -> NodeId {
     let weekday_node = text_leaf(tree, weekday, style.weekday_size, color);
     let icon_node = tree
@@ -357,7 +357,7 @@ fn compact_cell_row<'a>(
     style: &CellStyle,
     first_date: Option<Date<Iso>>,
     weather: impl Iterator<Item = Option<&'a DailyWeather>>,
-    color: crate::config::ColorConfig,
+    color: crate::config::color::ColorConfig,
     units: Units,
     locale: &LocaleFormatters,
 ) -> NodeId {
@@ -436,7 +436,8 @@ fn wmo_icon(code: Option<u32>) -> char {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{ColorConfig, Position};
+    use crate::config::Position;
+    use crate::config::color::ColorConfig;
     use chrono::TimeZone;
     use chrono_tz::UTC;
 

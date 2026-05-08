@@ -1,7 +1,7 @@
 use image::{Rgb, RgbImage, imageops};
 use tiny_skia::{Color, Pixmap, PremultipliedColorU8};
 
-use crate::config::BackgroundMethod;
+use crate::config::color::BackgroundMethod;
 
 /// Reconcile `img` with the exact target size: error if it's larger on either
 /// axis; otherwise pad according to `method` (no-op if already exact). The
@@ -89,7 +89,7 @@ fn blit_rgb(pm: &mut Pixmap, src: &RgbImage, dst_x: i32, dst_y: i32) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::ColorConfig;
+    use crate::config::color::ColorConfig;
 
     fn pixel_at(pm: &Pixmap, x: u32, y: u32) -> (u8, u8, u8) {
         let p = pm.pixel(x, y).expect("in-bounds");
