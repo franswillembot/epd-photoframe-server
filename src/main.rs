@@ -1,5 +1,6 @@
 mod album;
 mod background;
+mod color;
 mod config;
 mod degraded;
 mod device;
